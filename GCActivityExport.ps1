@@ -25,7 +25,7 @@
 # - Supports delta download
 
 # MS to sleep in between fetches. Maybe help with rate limiting. Maybe not.
-$SleepMillis = 1000
+
 
 
 PARAM(
@@ -208,6 +208,7 @@ else { if ($Destination.EndsWith("\")) { $Destination = $Destination.TrimEnd("\"
 $CookieFilename = ".GCDownloadStatus$ActivityFileType.cookie"
 $CookieFileFullPath = ($Destination + "\" + $CookieFilename)
 
+$SleepMillis = 1000
 
 #Write process information:
 Write-Host "INFO - Starting processing $ActivityFileType files from Garmin Connect with the following parameters:"
