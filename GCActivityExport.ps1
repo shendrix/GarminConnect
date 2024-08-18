@@ -17,9 +17,16 @@
 #         Remove Garmin Connect Actvity Export -Program Settings.xml dependency
 #         Layout and output improvements
 #         Report when rate limited (or any other error from Garmin)
+# 2.0   - (SPH fork)
+#         Sleep between requests (not parameterized, must edit script)
+#         When doing delta download, don't fetch all pages of activities needlessly   
 # The scripts does the following:
 # - Downloads activity files from garmin in FIT, TCX or GPX format.
 # - Supports delta download
+
+# MS to sleep in between fetches. Maybe help with rate limiting. Maybe not.
+$SleepMillis = 1000
+
 
 PARAM(
     [CmdletBinding()]
@@ -309,30 +316,8 @@ switch ($ActivityFileType) {
 }
 "ActivityFileType: {0}" -f $ActivityFileType | Write-Verbose
 
-#Get activity pages and check if the connection is successfull
-$ActivityList = @()
-$PageSize = 100
-$FirstRecord = 0
-$Pages = 0
-do {
-    $Uri = [System.Uri]::new($ActivitySearchURL)
-    $Path = "{0}limit={1}&start={2}" -f $Uri.PathAndQuery, $PageSize, $FirstRecord
-    $Headers.Path = $Path
-    $Url = "https://connect.garmin.com", $Path -join ""
-    "Activity list url: {0}" -f $Url | Write-Verbose
-    $SearchResults = Invoke-RestMethod -Uri $Url -Method get -WebSession $GarminConnectSession -ErrorAction SilentlyContinue -Headers $Headers
-    $ActivityList += $SearchResults
-    $FirstRecord = $FirstRecord + $PageSize
-    $Pages++
-}
-until ($SearchResults.Count -eq 0)
 
-if ($Pages -gt 0) { Write-Host "SUCCESS - Successfully connected to Garmin Connect" -ForegroundColor Green }
-else {
-    Write-Error "ERROR - Connection to Garmin Connect failed. Error:`n$($error[0])."
-    break
-}
-#$TotalPages = $Pages
+$DeltaCookie = 0
 
 #Validate download option
 "Validate download option" | Write-Verbose
@@ -363,6 +348,50 @@ if ($DownloadOption -eq "New") {
         }
     }
 }
+
+
+
+
+#Get activity pages and check if the connection is successfull
+$ActivityList = @()
+$PageSize = 100
+$FirstRecord = 0
+$Pages = 0
+do {
+	Write-Host "Downloading next page ..."
+	Start-Sleep -Milliseconds $SleepMillis
+    $Uri = [System.Uri]::new($ActivitySearchURL)
+    $Path = "{0}limit={1}&start={2}" -f $Uri.PathAndQuery, $PageSize, $FirstRecord
+    $Headers.Path = $Path
+    $Url = "https://connect.garmin.com", $Path -join ""
+    "Activity list url: {0}" -f $Url | Write-Verbose
+    $SearchResults = Invoke-RestMethod -Uri $Url -Method get -WebSession $GarminConnectSession -ErrorAction SilentlyContinue -Headers $Headers
+	
+	
+	# Look at first record. Should be most recent. If we have DeltaCookie and it is <= first record of first page, we don't need to do anything - including fetching all pages
+	if ($FirstRecord -eq 0 -and $SearchResults.Count -gt 0 -and $DeltaCookie -gt 0 -and $SearchResults[0].ActivityId -le $DeltaCookie) {
+		Write-Host "First record returned is less than or equal to cookie - we have nothing new to import"
+		break
+	}
+	
+    $ActivityList += $SearchResults
+    $FirstRecord = $FirstRecord + $PageSize
+    $Pages++
+}
+until ($SearchResults.Count -eq 0)
+
+# Initial import better done sorting ID in ascending order, so we can more easily start from where we left off when we
+# inevitably hit rate limiting or error out
+#$ActivityList = $ActivityList | Sort-Object -Property activityId 
+
+
+if ($Pages -gt 0) { Write-Host "SUCCESS - Successfully connected to Garmin Connect" -ForegroundColor Green }
+else {
+    Write-Error "ERROR - Connection to Garmin Connect failed. Error:`n$($error[0])."
+    exit 0
+}
+#$TotalPages = $Pages
+
 
 #Get activities
 $Activities = @()
@@ -485,11 +514,13 @@ Write-Host "INFO - Continue to process all retrieved activities, please wait..."
                 }
             }
         }
+        Start-Sleep -Milliseconds $SleepMillis
         $ActivityExportedCount++
     }
 }
 
 catch {
+	$_
     if ($_ -like "error code:*") {
         Write-Error "ERROR - An error occurred while downloading the activity files. Garmin responded with error code: {0}. This is probably because your requests are rate limited, please try again later!" -f $_
         break
